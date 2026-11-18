@@ -35,7 +35,16 @@ EM_JS_INLINE(void, upload, (char const *accept_types, upload_handler callback, v
   ///   Note: the string_view buffer is only valid for the duration of the callback - do not store it for later use.
   // EM_JS pointers and size_t are BigInts on wasm64, Numbers on wasm32.
   const to_size_t = typeof accept_types === 'bigint' ? BigInt : Number;
+  /// A home-screen web app on iOS never reports the file chosen in the picker to an input that has left the page
+  /// meanwhile, so the input stays referenced, and in the page within its closed dialog, until it reports a file or a
+  /// cancel; this then removes it.
+  globalThis["release_file_selector"] = function() {
+    var dg = document.getElementById("EmJsFileDialog");
+    if (dg) dg.remove();
+    delete globalThis["file_selector"];
+  };
   globalThis["open_file"] = function(e) {
+    globalThis["release_file_selector"]();
     const file_reader = new FileReader();
     file_reader.onload = (event) => {
       const uint8Arr = new Uint8Array(event.target.result);
@@ -56,6 +65,7 @@ EM_JS_INLINE(void, upload, (char const *accept_types, upload_handler callback, v
   /// In this case, the upload handler will get the empty string_view.
   /// See https://developer.mozilla.org/en-US/docs/Web/API/HTMLElement/cancel_event
   file_selector.addEventListener('cancel', () => {
+    globalThis["release_file_selector"]();
     Module["ccall"]('upload_file_return', 'number', ['string', 'string', 'pointer', 'number', 'pointer', 'pointer'], ["", "", 0, to_size_t(0), callback, callback_data]);
   });
   file_selector.setAttribute('accept', UTF8ToString(Number(accept_types)));
@@ -64,6 +74,9 @@ EM_JS_INLINE(void, upload, (char const *accept_types, upload_handler callback, v
   /// As a workaround, we create <dialog> where the user manually clicks on <input>.
   var is_safari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
   if (is_safari) {
+    /// a dialog the user dismissed without choosing reported neither event
+    globalThis["release_file_selector"]();
+    globalThis["file_selector"] = file_selector;
     var dialog = document.createElement('dialog');
     dialog.setAttribute('id', 'EmJsFileDialog');
     var desc = document.createElement('p');
@@ -71,7 +84,7 @@ EM_JS_INLINE(void, upload, (char const *accept_types, upload_handler callback, v
     dialog.appendChild(desc);
     /// We should recreate <dialog> every call; it is the most natural way to reset input.value.
     /// Otherwise, if the user re-selects the same file, it triggers the 'cancel' event instead of 'onchange'.
-    file_selector.setAttribute('onclick', 'var dg = document.getElementById("EmJsFileDialog"); dg.close(); dg.remove()');
+    file_selector.setAttribute('onclick', 'document.getElementById("EmJsFileDialog").close()');
     dialog.appendChild(file_selector);
     document.body.append(dialog);
     dialog.showModal();
